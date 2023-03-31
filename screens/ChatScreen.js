@@ -1,38 +1,85 @@
-import { View, Text, TextInput, StyleSheet, KeyboardAvoidingView, FlatList, Platform, LayoutAnimation } from 'react-native'
+import { View, Text, TextInput, StyleSheet, KeyboardAvoidingView, FlatList, ActivityIndicator, Platform, LayoutAnimation, Image } from 'react-native'
 import React, { useLayoutEffect, useCallback, useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigation } from '@react-navigation/native';
-import { FontAwesome } from '@expo/vector-icons';
+import { FontAwesome, Foundation } from '@expo/vector-icons';
 import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot } from "firebase/firestore";
 import { db } from '../firebase';
-
+import * as ImagePicker from 'expo-image-picker';
+import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 
 export const ChatScreen = ({ route }) => {
     const [input, setInput] = useState('')
     const [messages, setMessages] = useState([]);
+    const [selectedImage, setSelectedImage] = useState(null);
+    
     const flatListRef = useRef(null);
 
-    // console.log(auth.currentUser);
     const { data } = route.params;
-    console.log(data);
+    // console.log(data);
     const navigation = useNavigation();
     useLayoutEffect(() => {
         navigation.setOptions({
             title: data.chatName
         })
     }, [])
+    
+    const pickImage = useCallback(async () => {
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.All,
+                allowsEditing: true,
+                aspect: [4, 3],
+                quality: 1,
+            });
+            if (!result.canceled) {
+                setSelectedImage(result.uri);
+                uploadImage(result.uri);
+            }
+        } catch (error) {
+            console.log(error);
+        }
+    }, [uploadImage]);
+      
+    const uploadImage = async (uri) => {
+        const storage = getStorage();
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        const storageRef = ref(storage, `lovish/${Date.now()}`);
+        await uploadBytes(storageRef, blob);
+        url = await getDownloadURL(storageRef);
+        sendImage();
+        // return url;
+    };
 
-    const sendMessage = useCallback(() => {
-        const messagesRef = collection(db, "chats", data.id, "messages");
-        addDoc(messagesRef, {
-            timestamp: serverTimestamp(),
-            message: input,
-            uid: data.user.user.uid,
-            name: data.user._tokenResponse.displayName,
+    const sendImage = useCallback(async () => {
+        const messagesRef = collection(db, 'chats', data.id, 'messages');
+        await addDoc(messagesRef, {
+          timestamp: serverTimestamp(),
+        //   message: input.trim(),
+          uid: data.user.user.uid,
+          name: data.user._tokenResponse.displayName,
+          imageUrl: url,
         });
-        setInput("");
-        console.log('Message Send');
 
-    }, [data.id, data.user._tokenResponse.displayName, data.user.user.uid, input]);
+        setInput('');
+        setSelectedImage(null);
+      }, [data.id, input, selectedImage]);
+
+    const sendMessage = useCallback(async () => {
+        if (input.trim() === '') {
+          return;
+        }
+        const messagesRef = collection(db, 'chats', data.id, 'messages');
+        await addDoc(messagesRef, {
+          timestamp: serverTimestamp(),
+          message: input.trim(),
+          uid: data.user.user.uid,
+          name: data.user._tokenResponse.displayName,
+        });
+        setInput('');
+        setSelectedImage(null);
+      }, [data.id, input, selectedImage]);
+      
 
     useEffect(() => {
         const q = query(
@@ -71,10 +118,35 @@ export const ChatScreen = ({ route }) => {
             return `${hours}:${minutes}`;
         }
     }, []);
-    function isUserMessage(message) {
-        // console.log(message);
-        return message.uid === data.user.user.uid;
-    }
+    
+    const isUserMessage = useCallback((message) => message.uid === data.user.user.uid, [data.user.user.uid]);
+
+    useEffect(() => {
+        if (messages.length > 0) {
+          flatListRef.current.scrollToEnd();
+        }
+      }, [messages]);
+
+      const renderItem = ({ item, index }) => {
+        const isLastItem = index === messages.length - 1;
+    
+        return (
+          <View style={isUserMessage(item) ? styles.userChat : styles.otherChat} padding={12} margin={10}>
+            <Text style={isUserMessage(item) ? styles.userMessages : styles.otherMessages}>{item.name}</Text>
+            {item.imageUrl ? (
+              <View style={styles.imageContainer}>
+                    <Image source={{ uri: item.imageUrl }} style={styles.image}/>
+                    <Text style={styles.time}>{formatTimestamp(item.timestamp)}</Text>
+              </View>
+            ) : (
+              <View style={styles.messageContainer}>
+                <Text style={styles.message}>{item.message}</Text>
+                <Text style={styles.time}>{formatTimestamp(item.timestamp)}</Text>
+              </View>
+            )}
+          </View>
+        );
+      };
 
     return (
         <KeyboardAvoidingView backgroundColor="white" behavior={Platform.OS === 'ios' ? 'padding' : 0} flex={1}>
@@ -83,21 +155,7 @@ export const ChatScreen = ({ route }) => {
                     data={messages}
                     keyExtractor={(item) => item.id}
                     ref={flatListRef}
-                    renderItem={({ item }) => {
-                        // console.log(item)
-
-                        return (
-                            <View style={isUserMessage(item) ? styles.userChat : styles.otherChat} padding={12} margin={10}>
-                                <Text style={isUserMessage(item) ? styles.userMessages : styles.otherMessages}>{item.name}</Text>
-                                <View style={styles.messageContainer}>
-                                    <Text style={styles.message}>{item.message}</Text>
-                                    <Text style={styles.time}>{formatTimestamp(item.timestamp)}</Text>
-                                </View>
-                            </View>
-
-                        )
-                    }
-                    }
+                    renderItem={renderItem}
                 />
             </View>
 
@@ -111,7 +169,8 @@ export const ChatScreen = ({ route }) => {
                     placeholder="Enter message"
                     placeholderTextColor="#fff"
                 />
-                <FontAwesome style={styles.icon} disabled={!input} onPress={sendMessage} name="send" size={26} color="#fff" />
+                <Foundation style={styles.icon} name="photo" size={24} color="#fff" onPress={pickImage} />
+                <FontAwesome style={styles.icon} onPress={sendMessage} name="send" size={26} color="#fff" />
             </View>
         </KeyboardAvoidingView>
     )
@@ -120,6 +179,14 @@ export const ChatScreen = ({ route }) => {
 const styles = StyleSheet.create({
     main: {
         flex: 0.8
+    },
+    imageContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    image: {
+        width: 200,
+        height: 200,
     },
     keyboard: {
         flexDirection: 'row',
@@ -133,7 +200,7 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderRadius: 20,
         borderColor: '#fff',
-        width: "90%",
+        width: "80%",
         color: 'white'
     },
     icon: {
@@ -178,6 +245,6 @@ const styles = StyleSheet.create({
         color: 'white',
         marginLeft: 'auto',
         marginTop: 'auto',
-        padding:6
+        padding: 6
     },
 });
